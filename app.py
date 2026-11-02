@@ -52,18 +52,21 @@ def get_barcode_info(barcode_num):
     return jsonify({"success": True, "barcode": barcode_num, "name": product_name})
 
 
-# 등록된 보관 위치 목록 조회 API (추가)
+# 등록된 보관 위치 목록 조회 API
 @app.route("/api/locations", methods=["GET"])
 def get_locations():
-    conn = get_db_connection()
-    rows = conn.execute(
-        "SELECT DISTINCT location FROM inventory WHERE is_deleted = 0 AND location != ''"
-    ).fetchall()
-    conn.close()
-    locations = [row["location"] for row in rows]
-    if "기본" not in locations:
-        locations.insert(0, "기본")
-    return jsonify(locations)
+    try:
+        conn = get_db_connection()
+        rows = conn.execute(
+            "SELECT DISTINCT location FROM inventory WHERE is_deleted = 0 AND location != ''"
+        ).fetchall()
+        conn.close()
+        locations = [row["location"] for row in rows]
+        if "기본" not in locations:
+            locations.insert(0, "기본")
+        return jsonify(locations)
+    except Exception as e:
+        return jsonify(["기본", "냉장실", "냉동실", "팬트리"])
 
 
 # 재고 목록 조회 (정렬 및 휴지통 필터 지원)
@@ -115,8 +118,11 @@ def get_items():
     item_list = []
 
     for item in items:
-        exp = datetime.strptime(item["expiry_date"], "%Y-%m-%d").date()
-        diff = (exp - today).days
+        try:
+            exp = datetime.strptime(item["expiry_date"], "%Y-%m-%d").date()
+            diff = (exp - today).days
+        except:
+            diff = 0
 
         if diff < 0:
             status = "expired"
@@ -144,21 +150,28 @@ def get_items():
 
 @app.route("/api/items", methods=["POST"])
 def add_item():
-    data = request.json
-    conn = get_db_connection()
-    conn.execute(
-        "INSERT INTO inventory (barcode, name, expiry_date, quantity, location, is_deleted) VALUES (?, ?, ?, ?, ?, 0)",
-        (
-            data.get("barcode", ""),
-            data["name"],
-            data["expiry_date"],
-            data.get("quantity", 1),
-            data.get("location", "기본"),
-        ),
-    )
-    conn.commit()
-    conn.close()
-    return jsonify({"success": True})
+    try:
+        data = request.json
+        if not data or not data.get("name") or not data.get("expiry_date"):
+            return jsonify({"success": False, "message": "상품명과 유통기한은 필수입니다."}), 400
+
+        conn = get_db_connection()
+        conn.execute(
+            "INSERT INTO inventory (barcode, name, expiry_date, quantity, location, is_deleted) VALUES (?, ?, ?, ?, ?, 0)",
+            (
+                data.get("barcode", ""),
+                data["name"],
+                data["expiry_date"],
+                data.get("quantity", 1),
+                data.get("location", "기본"),
+            ),
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({"success": True})
+    except Exception as e:
+        print(f"Add Item Error: {str(e)}")
+        return jsonify({"success": False, "message": str(e)}), 500
 
 
 # 휴지통으로 이동 (소프트 삭제)
@@ -249,8 +262,11 @@ def get_items_summary():
     today = date.today()
 
     for item in summaries:
-        exp = datetime.strptime(item["earliest_expiry"], "%Y-%m-%d").date()
-        diff = (exp - today).days
+        try:
+            exp = datetime.strptime(item["earliest_expiry"], "%Y-%m-%d").date()
+            diff = (exp - today).days
+        except:
+            diff = 0
 
         summary_list.append(
             {
