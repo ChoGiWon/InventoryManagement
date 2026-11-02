@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>유통기한 관리 스캐너</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+</head>
+
+<body class="bg-gray-100 text-gray-800 min-h-screen">
+    <div class="max-w-md mx-auto bg-white min-h-screen shadow-md flex flex-col">
+        <!-- 헤더 -->
+        <header
+            class="bg-blue-600 text-white p-4 font-bold text-lg flex justify-between items-center sticky top-0 z-10">
+            <span id="header-title">📦 유통기한 관리</span>
+            <div class="space-x-2 flex items-center">
+                <button onclick="toggleTrashMode()" id="trash-toggle-btn"
+                    class="text-xs bg-blue-700 hover:bg-blue-800 px-2.5 py-1 rounded">휴지통</button>
+                <a href="/api/export/excel" class="text-xs bg-green-600 hover:bg-green-700 px-2.5 py-1 rounded">엑셀</a>
+            </div>
+        </header>
+
+        <div class="flex border-b bg-white text-sm font-semibold text-gray-600">
+            <button id="tab-all" onclick="switchTab('all')"
+                class="flex-1 py-2 text-center border-b-2 border-blue-600 text-blue-600">개별 목록</button>
+            <button id="tab-summary" onclick="switchTab('summary')"
+                class="flex-1 py-2 text-center border-b-2 border-transparent text-gray-500">∑ 합계</button>
+            <button id="tab-calendar" onclick="switchTab('calendar')"
+                class="flex-1 py-2 text-center border-b-2 border-transparent text-gray-500">📅 달력</button>
+        </div>
+        
+        <!-- 메인 콘텐츠 -->
+        <main class="p-4 flex-1">
+            <!-- 카메라 바코드 스캐너 영역 -->
+            <div id="scanner-section" class="mb-4 bg-gray-50 p-2 rounded-lg border border-dashed border-gray-300">
+                <div id="reader" class="w-full"></div>
+                <button id="toggle-scan-btn" onclick="toggleScanner()"
+                    class="w-full mt-2 bg-indigo-600 text-white py-2 rounded-lg font-semibold text-sm">
+                    📷 바코드 스캔 시작
+                </button>
+            </div>
+
+            <!-- 상품 등록 폼 -->
+            <form id="item-form" onsubmit="saveItem(event)"
+                class="bg-gray-50 p-4 rounded-lg shadow-inner mb-6 space-y-3">
+                <div>
+                    <label class="block text-xs font-semibold text-gray-600">바코드</label>
+                    <input type="text" id="barcode" class="w-full p-2 border rounded text-sm bg-gray-100"
+                        placeholder="스캔 또는 직접 입력" readonly>
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-gray-600">상품명 *</label>
+                    <input type="text" id="name" required class="w-full p-2 border rounded text-sm"
+                        placeholder="예: 신라면 5입">
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600">유통기한 *</label>
+                        <input type="date" id="expiry_date" required class="w-full p-2 border rounded text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600">수량</label>
+                        <input type="number" id="quantity" value="1" min="1" class="w-full p-2 border rounded text-sm">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-gray-600">보관 위치</label>
+                    <input type="text" id="location" value="기본" class="w-full p-2 border rounded text-sm"
+                        placeholder="예: 창고 A구역 / 냉장고 1번">
+                </div>
+                <button type="submit"
+                    class="w-full bg-green-600 text-white py-2 rounded-lg font-bold text-sm hover:bg-green-700">등록하기</button>
+            </form>
+
+            <!-- 검색 및 정렬 컨트롤 바 -->
+            <div class="mb-3 space-y-2">
+                <input type="text" id="search-input" oninput="loadItems()" placeholder="🔍 상품명, 바코드, 위치 검색..."
+                    class="w-full p-2 border rounded text-sm bg-gray-50">
+                <div class="flex justify-between items-center">
+                    <span class="text-xs font-bold text-gray-600" id="list-heading">재고 현황</span>
+                    <select id="sort-select" onchange="loadItems()"
+                        class="text-xs p-1.5 border rounded bg-white text-gray-700">
+                        <option value="expiry_asc">▲ 유통기한 오름차순</option>
+                        <option value="expiry_desc">▼ 유통기한 내림차순</option>
+                        <option value="name_asc">▲ 상품명 오름차순</option>
+                        <option value="name_desc">▼ 상품명 내림차순</option>
+                        <option value="quantity_asc">▲ 수량 오름차순</option>
+                        <option value="quantity_desc">▼ 수량 내림차순</option>
+                        <option value="barcode_asc">▲ 바코드 오름차순</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- 재고 목록 컨테이너 -->
+            <div id="item-list" class="space-y-2"></div>
+        </main>
+    </div>
+
+    <script>
+        let html5QrcodeScanner = null;
+        let isScanning = false;
+        let isTrashView = false;
+        let currentTab = 'all';
+
+        function toggleScanner() {
+            const btn = document.getElementById('toggle-scan-btn');
+            if (!isScanning) {
+                html5QrcodeScanner = new Html5Qrcode("reader");
+                html5QrcodeScanner.start(
+                    { facingMode: "environment" },
+                    { fps: 10, qrbox: { width: 250, height: 150 } },
+                    onScanSuccess
+                ).catch(err => alert("카메라 접근 권한이 필요합니다."));
+                btn.innerText = "⏹ 스캔 중지";
+                btn.classList.replace('bg-indigo-600', 'bg-red-600');
+                isScanning = true;
+            } else {
+                stopScanner();
+            }
+        }
+
+        function stopScanner() {
+            if (html5QrcodeScanner) {
+                html5QrcodeScanner.stop().then(() => {
+                    document.getElementById('reader').innerHTML = '';
+                    const btn = document.getElementById('toggle-scan-btn');
+                    btn.innerText = "📷 바코드 스캔 시작";
+                    btn.classList.replace('bg-red-600', 'bg-indigo-600');
+                    isScanning = false;
+                });
+            }
+        }
+
+        function onScanSuccess(decodedText) {
+            document.getElementById('barcode').value = decodedText;
+            stopScanner();
+
+            fetch(`/api/barcode/${decodedText}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data.name) {
+                        document.getElementById('name').value = data.name;
+                    }
+                    document.getElementById('expiry_date').focus();
+                });
+        }
+
+        function saveItem(e) {
+            e.preventDefault();
+            const data = {
+                barcode: document.getElementById('barcode').value,
+                name: document.getElementById('name').value,
+                expiry_date: document.getElementById('expiry_date').value,
+                quantity: parseInt(document.getElementById('quantity').value),
+                location: document.getElementById('location').value
+            };
+
+            fetch('/api/items', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            })
+                .then(res => res.json())
+                .then(() => {
+                    document.getElementById('item-form').reset();
+                    document.getElementById('location').value = '기본';
+                    document.getElementById('quantity').value = 1;
+                    loadItems();
+                });
+        }
+
+        function deleteItem(id) {
+            if (confirm('휴지통으로 이동하시겠습니까?')) {
+                fetch(`/api/items/${id}`, { method: 'DELETE' })
+                    .then(() => loadItems());
+            }
+        }
+
+        function restoreItem(id) {
+            fetch(`/api/items/${id}/restore`, { method: 'POST' })
+                .then(() => loadItems());
+        }
+
+        function permanentDelete(id) {
+            if (confirm('영구 삭제하시겠습니까? 복구할 수 없습니다.')) {
+                fetch(`/api/items/${id}/permanent`, { method: 'DELETE' })
+                    .then(() => loadItems());
+            }
+        }
+
+        function toggleTrashMode() {
+            isTrashView = !isTrashView;
+            const trashBtn = document.getElementById('trash-toggle-btn');
+            const headerTitle = document.getElementById('header-title');
+            const scannerSection = document.getElementById('scanner-section');
+            const itemForm = document.getElementById('item-form');
+            const listHeading = document.getElementById('list-heading');
+
+            if (isTrashView) {
+                trashBtn.innerText = "목록으로";
+                trashBtn.classList.replace('bg-blue-700', 'bg-gray-700');
+                headerTitle.innerText = "🗑 휴지통";
+                scannerSection.style.display = 'none';
+                itemForm.style.display = 'none';
+                listHeading.innerText = "삭제된 항목 (복구 가능)";
+            } else {
+                trashBtn.innerText = "휴지통";
+                trashBtn.classList.replace('bg-gray-700', 'bg-blue-700');
+                headerTitle.innerText = "📦 유통기한 관리";
+                scannerSection.style.display = 'block';
+                itemForm.style.display = 'block';
+                listHeading.innerText = "재고 현황";
+            }
+            loadItems();
+        }
+
+        function loadItems() {
+            const sortVal = document.getElementById('sort-select').value;
+            const searchVal = document.getElementById('search-input').value;
+
+            let url = `/api/items?sort=${sortVal}&trash=${isTrashView}`;
+            if (searchVal) {
+                url += `&q=${encodeURIComponent(searchVal)}`;
+            }
+
+            fetch(url)
+                .then(res => res.json())
+                .then(items => {
+                    const listContainer = document.getElementById('item-list');
+                    listContainer.innerHTML = '';
+
+                    if (items.length === 0) {
+                        listContainer.innerHTML = `<div class="text-center py-8 text-gray-400 text-sm">항목이 없습니다.</div>`;
+                        return;
+                    }
+
+                    items.forEach(item => {
+                        let badgeColor = 'bg-green-100 text-green-800';
+                        let statusText = `D-${item.days_left}`;
+
+                        if (item.status === 'expired') {
+                            badgeColor = 'bg-red-100 text-red-800 font-bold';
+                            statusText = `만료 (${Math.abs(item.days_left)}일 지남)`;
+                        } else if (item.status === 'warning') {
+                            badgeColor = 'bg-yellow-100 text-yellow-800 font-bold';
+                            statusText = `D-${item.days_left} (임박)`;
+                        }
+
+                        let actionButtons = `<button onclick="deleteItem(${item.id})" class="text-gray-400 hover:text-red-500 p-1 text-sm" title="휴지통으로 이동">🗑</button>`;
+
+                        if (item.is_deleted === 1) {
+                            badgeColor = 'bg-gray-200 text-gray-700';
+                            statusText = '휴지통 보관중';
+                            actionButtons = `
+                                <button onclick="restoreItem(${item.id})" class="text-blue-500 hover:text-blue-700 px-2 py-1 text-xs font-bold border rounded bg-blue-50">복원</button>
+                                <button onclick="permanentDelete(${item.id})" class="text-red-500 hover:text-red-700 px-2 py-1 text-xs font-bold border rounded bg-red-50">영구삭제</button>
+                            `;
+                        }
+
+                        const card = `
+                            <div class="bg-white p-3 rounded-lg border shadow-sm flex justify-between items-center">
+                                <div>
+                                    <div class="flex items-center space-x-2">
+                                        <span class="font-bold text-sm">${item.name}</span>
+                                        <span class="text-xs px-2 py-0.5 rounded-full ${badgeColor}">${statusText}</span>
+                                    </div>
+                                    <div class="text-xs text-gray-500 mt-1">
+                                        기한: ${item.expiry_date} | 수량: ${item.quantity}개 | 위치: ${item.location}
+                                    </div>
+                                </div>
+                                <div class="flex items-center space-x-1">
+                                    ${actionButtons}
+                                </div>
+                            </div>
+                        `;
+                        listContainer.innerHTML += card;
+                    });
+                });
+        }
+        function switchTab(tab) {
+            currentTab = tab;
+            const tabAll = document.getElementById('tab-all');
+            const tabSummary = document.getElementById('tab-summary');
+            const sortSelect = document.getElementById('sort-select');
+            const searchInput = document.getElementById('search-input');
+
+            if (tab === 'all') {
+                tabAll.className = "flex-1 py-2 text-center border-b-2 border-blue-600 text-blue-600";
+                tabSummary.className = "flex-1 py-2 text-center border-b-2 border-transparent text-gray-500";
+                sortSelect.style.display = 'block';
+                loadItems();
+            } else {
+                tabSummary.className = "flex-1 py-2 text-center border-b-2 border-blue-600 text-blue-600";
+                tabAll.className = "flex-1 py-2 text-center border-b-2 border-transparent text-gray-500";
+                sortSelect.style.display = 'none'; // 합계 뷰에서는 개별 정렬 숨김
+                loadSummary();
+            }
+        }
+
+        function loadSummary() {
+            fetch('/api/items/summary')
+                .then(res => res.json())
+                .then(items => {
+                    const listContainer = document.getElementById('item-list');
+                    listContainer.innerHTML = '';
+
+                    if (items.length === 0) {
+                        listContainer.innerHTML = `<div class="text-center py-8 text-gray-400 text-sm">합계 데이터가 없습니다.</div>`;
+                        return;
+                    }
+
+                    items.forEach(item => {
+                        let badgeColor = item.days_left < 0 ? 'bg-red-100 text-red-800' : (item.days_left <= 7 ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800');
+
+                        const card = `
+                    <div class="bg-white p-3 rounded-lg border shadow-sm flex justify-between items-center">
+                        <div>
+                            <div class="flex items-center space-x-2">
+                                <span class="font-bold text-sm">${item.name}</span>
+                                <span class="text-xs text-gray-400">(${item.barcode})</span>
+                            </div>
+                            <div class="text-xs text-gray-500 mt-1">
+                                가장 빠른 기한: <span class="font-semibold">${item.earliest_expiry}</span> 
+                                <span class="px-1.5 py-0.5 rounded ${badgeColor} text-xs">D-${item.days_left}</span>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <span class="text-xs text-gray-400">등록 ${item.item_count}건</span>
+                            <div class="text-lg font-bold text-blue-600">총 ${item.total_quantity}개</div>
+                        </div>
+                    </div>
+                `;
+                        listContainer.innerHTML += card;
+                    });
+                });
+        }
+
+        // 기존 switchTab 함수 수정
+        function switchTab(tab) {
+            currentTab = tab;
+            const tabAll = document.getElementById('tab-all');
+            const tabSummary = document.getElementById('tab-summary');
+            const tabCalendar = document.getElementById('tab-calendar');
+            const sortSelect = document.getElementById('sort-select');
+            const searchInput = document.getElementById('search-input');
+            const scannerSection = document.getElementById('scanner-section');
+            const itemForm = document.getElementById('item-form');
+
+            // 탭 스타일 초기화
+            [tabAll, tabSummary, tabCalendar].forEach(el => el.className = "flex-1 py-2 text-center border-b-2 border-transparent text-gray-500");
+
+            if (tab === 'all') {
+                tabAll.className = "flex-1 py-2 text-center border-b-2 border-blue-600 text-blue-600";
+                sortSelect.parentElement.style.display = 'flex';
+                scannerSection.style.display = 'block';
+                itemForm.style.display = 'block';
+                loadItems();
+            } else if (tab === 'summary') {
+                tabSummary.className = "flex-1 py-2 text-center border-b-2 border-blue-600 text-blue-600";
+                sortSelect.parentElement.style.display = 'none';
+                scannerSection.style.display = 'none';
+                itemForm.style.display = 'none';
+                loadSummary();
+            } else if (tab === 'calendar') {
+                tabCalendar.className = "flex-1 py-2 text-center border-b-2 border-blue-600 text-blue-600";
+                sortSelect.parentElement.style.display = 'none';
+                scannerSection.style.display = 'none';
+                itemForm.style.display = 'none';
+                loadCalendarView();
+            }
+        }
+
+        function loadCalendarView() {
+            const currentYM = new Date().toISOString().slice(0, 7); // 기본 현재 년월
+            fetch(`/api/items/calendar?ym=${currentYM}`)
+                .then(res => res.json())
+                .then(data => {
+                    const listContainer = document.getElementById('item-list');
+                    listContainer.innerHTML = `
+                <div class="mb-3 bg-blue-50 p-3 rounded-lg text-center text-xs font-bold text-blue-700">
+                    📅 ${currentYM} 유통기한 마감 캘린더
+                </div>
+            `;
+
+                    if (Object.keys(data).length === 0) {
+                        listContainer.innerHTML += `<div class="text-center py-8 text-gray-400 text-sm">이번 달 마감되는 품목이 없습니다.</div>`;
+                        return;
+                    }
+
+                    for (const [dateStr, items] of Object.entries(data)) {
+                        let itemsHtml = items.map(i => `
+                    <div class="flex justify-between items-center text-xs py-1 border-b last:border-none">
+                        <span class="font-semibold">${i.name} (${i.quantity}개)</span>
+                        <span class="text-gray-500">위치: ${i.location}</span>
+                    </div>
+                `).join('');
+
+                        listContainer.innerHTML += `
+                    <div class="bg-white p-3 rounded-lg border shadow-sm mb-2">
+                        <div class="text-xs font-bold text-red-600 mb-1">📌 ${dateStr} 마감</div>
+                        ${itemsHtml}
+                    </div>
+                `;
+                    }
+                });
+        }
+
+        loadItems();
+    </script>
+</body>
+
+</html>
