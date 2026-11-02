@@ -18,6 +18,8 @@ def get_db_connection():
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
+
+    # 1. 테이블이 없으면 생성
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS inventory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,6 +31,16 @@ def init_db():
             is_deleted INTEGER DEFAULT 0
         )
     """)
+
+    # 2. 기존에 이미 생성된 DB에 누락된 컬럼이 있다면 자동으로 안전하게 추가
+    cursor.execute("PRAGMA table_info(inventory)")
+    columns = [column[1] for column in cursor.fetchall()]
+
+    if "is_deleted" not in columns:
+        cursor.execute("ALTER TABLE inventory ADD COLUMN is_deleted INTEGER DEFAULT 0")
+    if "location" not in columns:
+        cursor.execute("ALTER TABLE inventory ADD COLUMN location TEXT DEFAULT '기본'")
+
     conn.commit()
     conn.close()
 
@@ -153,7 +165,12 @@ def add_item():
     try:
         data = request.json
         if not data or not data.get("name") or not data.get("expiry_date"):
-            return jsonify({"success": False, "message": "상품명과 유통기한은 필수입니다."}), 400
+            return (
+                jsonify(
+                    {"success": False, "message": "상품명과 유통기한은 필수입니다."}
+                ),
+                400,
+            )
 
         conn = get_db_connection()
         conn.execute(
