@@ -1,8 +1,9 @@
+from datetime import date, datetime
 import os
 import sqlite3
-from datetime import datetime, date
-from flask import Flask, render_template, request, jsonify, send_file
+
 import openpyxl
+from flask import Flask, jsonify, render_template, request, send_file
 
 app = Flask(__name__)
 DB_PATH = "database.db"
@@ -49,6 +50,20 @@ def get_barcode_info(barcode_num):
     }
     product_name = mock_db.get(barcode_num, "")
     return jsonify({"success": True, "barcode": barcode_num, "name": product_name})
+
+
+# 등록된 보관 위치 목록 조회 API (추가)
+@app.route("/api/locations", methods=["GET"])
+def get_locations():
+    conn = get_db_connection()
+    rows = conn.execute(
+        "SELECT DISTINCT location FROM inventory WHERE is_deleted = 0 AND location != ''"
+    ).fetchall()
+    conn.close()
+    locations = [row["location"] for row in rows]
+    if "기본" not in locations:
+        locations.insert(0, "기본")
+    return jsonify(locations)
 
 
 # 재고 목록 조회 (정렬 및 휴지통 필터 지원)
@@ -215,7 +230,6 @@ def export_excel():
 @app.route("/api/items/summary", methods=["GET"])
 def get_items_summary():
     conn = get_db_connection()
-    # is_deleted = 0 인 데이터 중 바코드 및 상품명 기준으로 그룹화하여 합계 계산
     query = """
         SELECT 
             barcode, 
@@ -255,9 +269,7 @@ def get_items_summary():
 # 월별 유통기한 캘린더 데이터 조회
 @app.route("/api/items/calendar", methods=["GET"])
 def get_calendar_items():
-    year_month = request.args.get(
-        "ym", datetime.now().strftime("%Y-%m")
-    )  # 예: '2026-11'
+    year_month = request.args.get("ym", datetime.now().strftime("%Y-%m"))
 
     conn = get_db_connection()
     query = """
@@ -270,7 +282,7 @@ def get_calendar_items():
 
     calendar_data = {}
     for item in items:
-        day = item["expiry_date"]  # 'YYYY-MM-DD'
+        day = item["expiry_date"]
         if day not in calendar_data:
             calendar_data[day] = []
 

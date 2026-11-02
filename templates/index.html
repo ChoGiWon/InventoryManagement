@@ -11,10 +11,13 @@
 
 <body class="bg-gray-100 text-gray-800 min-h-screen">
     <div class="max-w-md mx-auto bg-white min-h-screen shadow-md flex flex-col">
-        <!-- 헤더 -->
+        <!-- 헤더 (버전 v0.0.1 표시 추가) -->
         <header
             class="bg-blue-600 text-white p-4 font-bold text-lg flex justify-between items-center sticky top-0 z-10">
-            <span id="header-title">📦 유통기한 관리</span>
+            <div class="flex items-center space-x-2">
+                <span id="header-title">📦 유통기한 관리</span>
+                <span class="text-xs bg-blue-700 px-1.5 py-0.5 rounded text-blue-200 font-mono">v0.0.2</span>
+            </div>
             <div class="space-x-2 flex items-center">
                 <button onclick="toggleTrashMode()" id="trash-toggle-btn"
                     class="text-xs bg-blue-700 hover:bg-blue-800 px-2.5 py-1 rounded">휴지통</button>
@@ -67,8 +70,14 @@
                 </div>
                 <div>
                     <label class="block text-xs font-semibold text-gray-600">보관 위치</label>
-                    <input type="text" id="location" value="기본" class="w-full p-2 border rounded text-sm"
-                        placeholder="예: 창고 A구역 / 냉장고 1번">
+                    <!-- 기존 목록 선택 및 직접 입력이 모두 가능한 datalist 적용 -->
+                    <input class="w-full p-2 border rounded text-sm bg-white" list="locationOptions" id="location" name="location" value="기본" placeholder="위치 선택 또는 직접 입력">
+                    <datalist id="locationOptions">
+                        <option value="기본">
+                        <option value="냉장실">
+                        <option value="냉동실">
+                        <option value="팬트리">
+                    </datalist>
                 </div>
                 <button type="submit"
                     class="w-full bg-green-600 text-white py-2 rounded-lg font-bold text-sm hover:bg-green-700">등록하기</button>
@@ -103,6 +112,24 @@
         let isScanning = false;
         let isTrashView = false;
         let currentTab = 'all';
+
+        // 페이지 로드 시 기존 보관 위치 목록 불러오기
+        function loadLocations() {
+            fetch('/api/locations')
+                .then(res => res.json())
+                .then(locations => {
+                    const datalist = document.getElementById('locationOptions');
+                    if (datalist) {
+                        datalist.innerHTML = '';
+                        locations.forEach(loc => {
+                            const opt = document.createElement('option');
+                            opt.value = loc;
+                            datalist.appendChild(opt);
+                        });
+                    }
+                })
+                .catch(err => console.log('Locations load error:', err));
+        }
 
         function toggleScanner() {
             const btn = document.getElementById('toggle-scan-btn');
@@ -153,8 +180,8 @@
                 barcode: document.getElementById('barcode').value,
                 name: document.getElementById('name').value,
                 expiry_date: document.getElementById('expiry_date').value,
-                quantity: parseInt(document.getElementById('quantity').value),
-                location: document.getElementById('location').value
+                quantity: parseInt(document.getElementById('quantity').value) || 1,
+                location: document.getElementById('location').value || '기본'
             };
 
             fetch('/api/items', {
@@ -163,11 +190,21 @@
                 body: JSON.stringify(data)
             })
                 .then(res => res.json())
-                .then(() => {
-                    document.getElementById('item-form').reset();
-                    document.getElementById('location').value = '기본';
-                    document.getElementById('quantity').value = 1;
-                    loadItems();
+                .then(responseData => {
+                    if (responseData.success !== false) {
+                        document.getElementById('item-form').reset();
+                        document.getElementById('barcode').value = '';
+                        document.getElementById('location').value = '기본';
+                        document.getElementById('quantity').value = 1;
+                        loadItems();
+                        loadLocations(); // 위치 목록 갱신
+                    } else {
+                        alert('등록에 실패했습니다.');
+                    }
+                })
+                .catch(err => {
+                    console.error('Save error:', err);
+                    alert('서버 통신 중 오류가 발생했습니다.');
                 });
         }
 
@@ -279,23 +316,36 @@
                     });
                 });
         }
+
         function switchTab(tab) {
             currentTab = tab;
             const tabAll = document.getElementById('tab-all');
             const tabSummary = document.getElementById('tab-summary');
+            const tabCalendar = document.getElementById('tab-calendar');
             const sortSelect = document.getElementById('sort-select');
-            const searchInput = document.getElementById('search-input');
+            const scannerSection = document.getElementById('scanner-section');
+            const itemForm = document.getElementById('item-form');
+
+            [tabAll, tabSummary, tabCalendar].forEach(el => el.className = "flex-1 py-2 text-center border-b-2 border-transparent text-gray-500");
 
             if (tab === 'all') {
                 tabAll.className = "flex-1 py-2 text-center border-b-2 border-blue-600 text-blue-600";
-                tabSummary.className = "flex-1 py-2 text-center border-b-2 border-transparent text-gray-500";
-                sortSelect.style.display = 'block';
+                sortSelect.parentElement.style.display = 'flex';
+                scannerSection.style.display = 'block';
+                itemForm.style.display = 'block';
                 loadItems();
-            } else {
+            } else if (tab === 'summary') {
                 tabSummary.className = "flex-1 py-2 text-center border-b-2 border-blue-600 text-blue-600";
-                tabAll.className = "flex-1 py-2 text-center border-b-2 border-transparent text-gray-500";
-                sortSelect.style.display = 'none'; // 합계 뷰에서는 개별 정렬 숨김
+                sortSelect.parentElement.style.display = 'none';
+                scannerSection.style.display = 'none';
+                itemForm.style.display = 'none';
                 loadSummary();
+            } else if (tab === 'calendar') {
+                tabCalendar.className = "flex-1 py-2 text-center border-b-2 border-blue-600 text-blue-600";
+                sortSelect.parentElement.style.display = 'none';
+                scannerSection.style.display = 'none';
+                itemForm.style.display = 'none';
+                loadCalendarView();
             }
         }
 
@@ -337,43 +387,8 @@
                 });
         }
 
-        // 기존 switchTab 함수 수정
-        function switchTab(tab) {
-            currentTab = tab;
-            const tabAll = document.getElementById('tab-all');
-            const tabSummary = document.getElementById('tab-summary');
-            const tabCalendar = document.getElementById('tab-calendar');
-            const sortSelect = document.getElementById('sort-select');
-            const searchInput = document.getElementById('search-input');
-            const scannerSection = document.getElementById('scanner-section');
-            const itemForm = document.getElementById('item-form');
-
-            // 탭 스타일 초기화
-            [tabAll, tabSummary, tabCalendar].forEach(el => el.className = "flex-1 py-2 text-center border-b-2 border-transparent text-gray-500");
-
-            if (tab === 'all') {
-                tabAll.className = "flex-1 py-2 text-center border-b-2 border-blue-600 text-blue-600";
-                sortSelect.parentElement.style.display = 'flex';
-                scannerSection.style.display = 'block';
-                itemForm.style.display = 'block';
-                loadItems();
-            } else if (tab === 'summary') {
-                tabSummary.className = "flex-1 py-2 text-center border-b-2 border-blue-600 text-blue-600";
-                sortSelect.parentElement.style.display = 'none';
-                scannerSection.style.display = 'none';
-                itemForm.style.display = 'none';
-                loadSummary();
-            } else if (tab === 'calendar') {
-                tabCalendar.className = "flex-1 py-2 text-center border-b-2 border-blue-600 text-blue-600";
-                sortSelect.parentElement.style.display = 'none';
-                scannerSection.style.display = 'none';
-                itemForm.style.display = 'none';
-                loadCalendarView();
-            }
-        }
-
         function loadCalendarView() {
-            const currentYM = new Date().toISOString().slice(0, 7); // 기본 현재 년월
+            const currentYM = new Date().toISOString().slice(0, 7);
             fetch(`/api/items/calendar?ym=${currentYM}`)
                 .then(res => res.json())
                 .then(data => {
@@ -407,7 +422,9 @@
                 });
         }
 
+        // 초기 실행
         loadItems();
+        loadLocations();
     </script>
 </body>
 
