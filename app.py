@@ -1,9 +1,15 @@
 from datetime import date, datetime
 import os
+import requests
 import sqlite3
 
 import openpyxl
 from flask import Flask, jsonify, render_template, request, send_file
+
+from dotenv import load_dotenv
+load_dotenv()  # .env 파일 로드
+
+api_key = os.getenv("PUBLIC_API_KEY")
 
 app = Flask(__name__)
 DB_PATH = "database.db"
@@ -55,12 +61,32 @@ def index():
 
 @app.route("/api/barcode/<barcode_num>", methods=["GET"])
 def get_barcode_info(barcode_num):
-    mock_db = {
-        "8801043014847": "농심 신라면",
-        "8801056000010": "코카콜라 500ml",
-        "8801062264826": "롯데 자일리톨 껌",
-    }
-    product_name = mock_db.get(barcode_num, "")
+    pub_api_key = os.getenv("PUBLIC_API_KEY")
+    product_name = ""
+
+    # 1. 식품안전나라 오픈 API(C005)를 통한 실시간 상품 조회 시도
+    if pub_api_key:
+        url = f"http://openapi.foodsafetykorea.go.kr/api/{pub_api_key}/C005/json/1/1/BRCD_NO={barcode_num}"
+        try:
+            response = requests.get(url, timeout=3)
+            if response.status_code == 200:
+                data = response.json()
+                c005 = data.get("C005", {})
+                row = c005.get("row", [])
+                if row and len(row) > 0:
+                    product_name = row[0].get("PRDLST_NM", "")
+        except Exception as e:
+            print(f"Barcode API Error: {str(e)}")
+
+    # 2. API 조회 결과가 없을 경우 기존 목업 데이터로 폴백
+    if not product_name:
+        mock_db = {
+            "8801043014847": "농심 신라면",
+            "8801056000010": "코카콜라 500ml",
+            "8801062264826": "롯데 자일리톨 껌",
+        }
+        product_name = mock_db.get(barcode_num, "")
+
     return jsonify({"success": True, "barcode": barcode_num, "name": product_name})
 
 
