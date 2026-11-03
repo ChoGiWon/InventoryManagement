@@ -17,7 +17,7 @@
             class="bg-blue-600 text-white p-4 font-bold text-lg flex justify-between items-center sticky top-0 z-10">
             <div class="flex items-center space-x-2">
                 <span id="header-title">📦 유통기한 관리</span>
-                <span id="version-tag" class="text-xs bg-blue-700 px-1.5 py-0.5 rounded text-blue-200 font-mono">v0.0.7</span>
+                <span id="version-tag" class="text-xs bg-blue-700 px-1.5 py-0.5 rounded text-blue-200 font-mono">v0.0.8</span>
             </div>
             <div class="space-x-2 flex items-center">
                 <button onclick="toggleTrashMode()" id="trash-toggle-btn"
@@ -104,7 +104,7 @@
                 </div>
             </div>
 
-            <!-- 재고 목록 컨테이너 (mb-10 오타 수정 반영) -->
+            <!-- 재고 목록 컨테이너 -->
             <div id="item-list" class="space-y-2 mb-10"></div>
         </main>
     </div>
@@ -230,11 +230,48 @@
             }
         }
 
-        // 합계/달력에서 항목 클릭 시 개별 목록으로 이동하며 해당 상품명으로 검색 연동
+        // 달력 등에서 항목 클릭 시 개별 목록으로 이동하며 해당 상품명으로 검색 연동
         function filterByItem(name) {
             switchTab('all');
             document.getElementById('search-input').value = name;
             loadItems();
+        }
+
+        // 합계 화면에서 항목 클릭 시 하단에 상세 내역 토글(펼치기/접기)
+        function toggleSummaryDetail(name, element) {
+            const detailId = `detail-${CSS.escape(name)}`;
+            const existingDetail = document.getElementById(detailId);
+            
+            if (existingDetail) {
+                existingDetail.remove();
+                return;
+            }
+
+            // 다른 열려있는 상세 영역들 모두 닫기
+            document.querySelectorAll('.summary-detail').forEach(el => el.remove());
+
+            // 서버에서 해당 상품의 상세 목록 가져오기
+            let url = `/api/items?q=${encodeURIComponent(name)}`;
+            fetch(url)
+                .then(res => res.json())
+                .then(items => {
+                    let itemsHtml = items.map(i => `
+                        <div class="flex justify-between items-center text-xs py-1.5 border-b last:border-none">
+                            <span>📅 기한: ${i.expiry_date} | 수량: ${i.quantity}개 | 위치: ${i.location}</span>
+                            <span class="px-1.5 py-0.5 rounded ${i.status === 'expired' ? 'bg-red-100 text-red-800 font-bold' : 'bg-green-100 text-green-800'}">D-${i.days_left}</span>
+                        </div>
+                    `).join('');
+
+                    const detailDiv = document.createElement('div');
+                    detailDiv.id = detailId;
+                    detailDiv.className = "summary-detail bg-gray-50 p-3 rounded-lg border border-blue-200 mt-2 space-y-1 shadow-inner";
+                    detailDiv.innerHTML = `
+                        <div class="text-xs font-bold text-blue-700 mb-1">📦 [${name}] 상세 내역 (${items.length}건)</div>
+                        ${itemsHtml || '<div class="text-gray-400 text-xs py-1">상세 항목이 없습니다.</div>'}
+                    `;
+
+                    element.after(detailDiv);
+                });
         }
 
         // 휴지통 모드: 상단 메뉴, 탭, 검색바 숨기고 리스트만 깔끔하게 표시
@@ -312,7 +349,7 @@
                             statusText = '휴지통 보관중';
                             actionButtons = `
                                 <button onclick="restoreItem(${item.id})" class="text-blue-500 hover:text-blue-700 px-2 py-1 text-xs font-bold border rounded bg-blue-50">복원</button>
-                                <button onclick="permanentDelete(${item.id})" class="text-red-500 hover:text-red-700 px-2 py-1 text-xs font-bold border rounded bg-red-50">영구삭제</button>
+                                <button onclick="permanentDelete(${item.id})" class="text-red-500 hover:text-red-700 px-2 py-1 text-xs font-bold border rounded bg-blue-50">영구삭제</button>
                             `;
                         }
 
@@ -345,6 +382,7 @@
             const sortSelect = document.getElementById('sort-select');
             const scannerSection = document.getElementById('scanner-section');
             const itemForm = document.getElementById('item-form');
+            const searchInput = document.getElementById('search-input');
 
             [tabAll, tabSummary, tabCalendar].forEach(el => el.className = "flex-1 py-2 text-center border-b-2 border-transparent text-gray-500");
 
@@ -353,6 +391,8 @@
                 sortSelect.parentElement.style.display = 'flex';
                 scannerSection.style.display = 'block';
                 itemForm.style.display = 'block';
+                // 개별 목록 탭으로 돌아올 때 검색어를 초기화하여 전체 리스트가 나오도록 보장
+                searchInput.value = '';
                 loadItems();
             } else if (tab === 'summary') {
                 tabSummary.className = "flex-1 py-2 text-center border-b-2 border-blue-600 text-blue-600";
@@ -384,9 +424,12 @@
                     items.forEach(item => {
                         let badgeColor = item.days_left < 0 ? 'bg-red-100 text-red-800' : (item.days_left <= 7 ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800');
 
-                        // 합계 항목 클릭 시 개별 목록으로 이동하며 해당 상품명으로 검색
-                        const card = `
-                            <div onclick="filterByItem('${item.name}')" class="bg-white p-3 rounded-lg border shadow-sm flex justify-between items-center cursor-pointer hover:bg-blue-50 transition">
+                        const cardWrapper = document.createElement('div');
+                        cardWrapper.className = "mb-2";
+                        
+                        // 합계 항목 클릭 시 개별 페이지 이동 대신 하단에 토글 형태로 상세 내역 표시
+                        cardWrapper.innerHTML = `
+                            <div onclick='toggleSummaryDetail("${item.name}", this.parentNode)' class="bg-white p-3 rounded-lg border shadow-sm flex justify-between items-center cursor-pointer hover:bg-blue-50 transition">
                                 <div>
                                     <div class="flex items-center space-x-2">
                                         <span class="font-bold text-sm">${item.name}</span>
@@ -403,7 +446,7 @@
                                 </div>
                             </div>
                         `;
-                        listContainer.innerHTML += card;
+                        listContainer.appendChild(cardWrapper);
                     });
                 });
         }
