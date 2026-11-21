@@ -7,6 +7,21 @@ from datetime import datetime
 from database import get_connection, set_meta, get_meta, UPLOAD_DIR, EXPORT_DIR
 
 
+def _ensure_inventory_columns(conn):
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(inventory_items)")
+    cols = {row[1] for row in cur.fetchall()}
+    changed = False
+    if "supplier" not in cols:
+        cur.execute("ALTER TABLE inventory_items ADD COLUMN supplier TEXT DEFAULT ''")
+        changed = True
+    if "category" not in cols:
+        cur.execute("ALTER TABLE inventory_items ADD COLUMN category TEXT DEFAULT ''")
+        changed = True
+    if changed:
+        conn.commit()
+
+
 def lookup_and_compare_barcode(scanned_data: dict) -> dict:
     """
     인식된 바코드 정보와 내부 DB(master_products)를 비교하여
@@ -40,7 +55,6 @@ def lookup_and_compare_barcode(scanned_data: dict) -> dict:
             status = "불일치"
             is_mismatch = True
         elif not scanned_val and db_val:
-            # 스캔 원천에 값이 없고 DB에만 있는 경우 DB 값으로 보완 표시
             scanned_val = db_val
             status = "일치(DB보완)"
             is_mismatch = False
@@ -48,16 +62,17 @@ def lookup_and_compare_barcode(scanned_data: dict) -> dict:
             status = "일치"
             is_mismatch = False
 
-        comparison_results.append({
-            "key": key,
-            "label": label,
-            "scanned_val": scanned_val or "-",
-            "db_val": db_val or "-",
-            "status": status,
-            "is_mismatch": is_mismatch,
-        })
+        comparison_results.append(
+            {
+                "key": key,
+                "label": label,
+                "scanned_val": scanned_val or "-",
+                "db_val": db_val or "-",
+                "status": status,
+                "is_mismatch": is_mismatch,
+            }
+        )
 
-    # 사진 우선순위: 내부 DB 사진 존재 시 우선 사용, 없으면 빈 값(사용자 업로드 유도)
     photo_path = db_dict.get("photo_path", "") if db_dict else ""
     if photo_path and not os.path.exists(photo_path):
         photo_path = ""
@@ -83,14 +98,23 @@ def save_uploaded_product_photo(bar_cd: str, source_file_path: str) -> str:
     cur = conn.cursor()
     cur.execute("SELECT bar_cd FROM master_products WHERE bar_cd = ?", (bar_cd,))
     if cur.fetchone():
-        cur.execute("UPDATE master_products SET photo_path = ? WHERE bar_cd = ?", (dest_path, bar_cd))
+        cur.execute(
+            "UPDATE master_products SET photo_path = ? WHERE bar_cd = ?",
+            (dest_path, bar_cd),
+        )
     else:
-        cur.execute("""
+        cur.execute(
+            """
             INSERT INTO master_products (bar_cd, prdlst_nm, photo_path, source_type)
             VALUES (?, ?, ?, '사용자직접등록')
-        """, (bar_cd, f"미등록상품({bar_cd})", dest_path))
+        """,
+            (bar_cd, f"미등록상품({bar_cd})", dest_path),
+        )
 
-    cur.execute("UPDATE inventory_items SET photo_path = ? WHERE bar_cd = ?", (dest_path, bar_cd))
+    cur.execute(
+        "UPDATE inventory_items SET photo_path = ? WHERE bar_cd = ?",
+        (dest_path, bar_cd),
+    )
     conn.commit()
     conn.close()
     return dest_path
@@ -108,11 +132,13 @@ def get_checked_extra_fields(db_record: dict) -> list:
     for p in prefs:
         if p["is_checked"] == 1:
             val = db_record.get(p["field_key"], "") if db_record else ""
-            extra_items.append({
-                "key": p["field_key"],
-                "label": p["field_label"],
-                "value": val if val else "정보 없음",
-            })
+            extra_items.append(
+                {
+                    "key": p["field_key"],
+                    "label": p["field_label"],
+                    "value": val if val else "정보 없음",
+                }
+            )
     return extra_items
 
 
@@ -154,7 +180,10 @@ def download_public_dataset(dataset_type: str) -> tuple[bool, str]:
         label = "식품(첨가물)품목제조보고"
 
     if not os.path.exists(key_file):
-        return False, f"인증키 파일이 없습니다.\n경로: {key_file}\n안내 팝업의 절차대로 키 파일을 먼저 저장해주세요."
+        return (
+            False,
+            f"인증키 파일이 없습니다.\n경로: {key_file}\n안내 팝업의 절차대로 키 파일을 먼저 저장해주세요.",
+        )
 
     with open(key_file, "r", encoding="utf-8") as f:
         api_key = f.read().strip()
@@ -183,7 +212,8 @@ def download_public_dataset(dataset_type: str) -> tuple[bool, str]:
             bar_cd = str(r.get("BAR_CD") or r.get("PRDLST_REPORT_NO") or "").strip()
             if not bar_cd:
                 continue
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO master_products (
                     bar_cd, prdlst_report_no, prdlst_nm, pog_daycnt, prdlst_dcnm,
                     bssh_nm, induty_nm, site_addr, prms_dt, end_dt, clsbiz_dt, source_type
@@ -200,20 +230,22 @@ def download_public_dataset(dataset_type: str) -> tuple[bool, str]:
                     end_dt = excluded.end_dt,
                     clsbiz_dt = excluded.clsbiz_dt,
                     source_type = excluded.source_type
-            """, (
-                bar_cd,
-                str(r.get("PRDLST_REPORT_NO", "")),
-                str(r.get("PRDLST_NM", "")),
-                str(r.get("POG_DAYCNT", "")),
-                str(r.get("PRDLST_DCNM", "")),
-                str(r.get("BSSH_NM", "")),
-                str(r.get("INDUTY_NM", "")),
-                str(r.get("SITE_ADDR", "")),
-                str(r.get("PRMS_DT", "")),
-                str(r.get("END_DT", "")),
-                str(r.get("CLSBIZ_DT", "")),
-                label,
-            ))
+            """,
+                (
+                    bar_cd,
+                    str(r.get("PRDLST_REPORT_NO", "")),
+                    str(r.get("PRDLST_NM", "")),
+                    str(r.get("POG_DAYCNT", "")),
+                    str(r.get("PRDLST_DCNM", "")),
+                    str(r.get("BSSH_NM", "")),
+                    str(r.get("INDUTY_NM", "")),
+                    str(r.get("SITE_ADDR", "")),
+                    str(r.get("PRMS_DT", "")),
+                    str(r.get("END_DT", "")),
+                    str(r.get("CLSBIZ_DT", "")),
+                    label,
+                ),
+            )
             saved_count += 1
 
         conn.commit()
@@ -235,6 +267,7 @@ def export_inventory_csv_for_pc() -> str:
     filepath = os.path.join(folder, filename)
 
     conn = get_connection()
+    _ensure_inventory_columns(conn)
     cur = conn.cursor()
     cur.execute("SELECT * FROM inventory_items ORDER BY expiry_date ASC")
     rows = cur.fetchall()
@@ -242,12 +275,25 @@ def export_inventory_csv_for_pc() -> str:
 
     with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
-        writer.writerow(["ID", "바코드", "제품명", "유통기한", "수량", "보관위치", "메모", "등록일"])
+        writer.writerow(
+            ["ID", "분류", "바코드", "제품명", "유통기한", "수량", "보관위치", "거래처", "메모", "등록일"]
+        )
         for r in rows:
-            writer.writerow([
-                r["id"], r["bar_cd"], r["prdlst_nm"], r["expiry_date"],
-                r["quantity"], r["location"], r["memo"], r["created_at"]
-            ])
+            r_dict = dict(r)
+            writer.writerow(
+                [
+                    r_dict.get("id", ""),
+                    r_dict.get("category", ""),
+                    r_dict.get("bar_cd", ""),
+                    r_dict.get("prdlst_nm", ""),
+                    r_dict.get("expiry_date", ""),
+                    r_dict.get("quantity", ""),
+                    r_dict.get("location", ""),
+                    r_dict.get("supplier", ""),
+                    r_dict.get("memo", ""),
+                    r_dict.get("created_at", ""),
+                ]
+            )
     return filepath
 
 
@@ -258,7 +304,10 @@ def get_calendar_month_summary(year: int, month: int) -> dict:
 
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM inventory_items WHERE expiry_date LIKE ?", (f"{prefix}%",))
+    cur.execute(
+        "SELECT * FROM inventory_items WHERE expiry_date LIKE ? ORDER BY id DESC",
+        (f"{prefix}%",),
+    )
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
 
@@ -266,7 +315,13 @@ def get_calendar_month_summary(year: int, month: int) -> dict:
     for item in rows:
         d_str = item["expiry_date"]
         if d_str not in summary:
-            summary[d_str] = {"count": 0, "total_qty": 0, "expired": 0, "soon": 0, "items": []}
+            summary[d_str] = {
+                "count": 0,
+                "total_qty": 0,
+                "expired": 0,
+                "soon": 0,
+                "items": [],
+            }
 
         exp_date = datetime.strptime(d_str, "%Y-%m-%d").date()
         diff_days = (exp_date - today).days
@@ -282,17 +337,81 @@ def get_calendar_month_summary(year: int, month: int) -> dict:
     return summary
 
 
-def add_inventory_item(bar_cd: str, prdlst_nm: str, expiry_date: str, quantity: int, location: str):
+def add_inventory_item(
+    bar_cd: str,
+    prdlst_nm: str,
+    expiry_date: str,
+    quantity: int,
+    location: str,
+    supplier: str = "",
+    category: str = "",
+):
     conn = get_connection()
+    _ensure_inventory_columns(conn)
     cur = conn.cursor()
     cur.execute("SELECT photo_path FROM master_products WHERE bar_cd = ?", (bar_cd,))
     row = cur.fetchone()
     photo_path = row["photo_path"] if row else ""
     now_str = datetime.now().strftime("%Y-%m-%d")
 
-    cur.execute("""
-        INSERT INTO inventory_items (bar_cd, prdlst_nm, expiry_date, quantity, location, photo_path, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (bar_cd, prdlst_nm, expiry_date, quantity, location, photo_path, now_str))
+    cur.execute(
+        """
+        INSERT INTO inventory_items (bar_cd, prdlst_nm, expiry_date, quantity, location, supplier, category, photo_path, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            bar_cd,
+            prdlst_nm,
+            expiry_date,
+            quantity,
+            location,
+            supplier,
+            category,
+            photo_path,
+            now_str,
+        ),
+    )
     conn.commit()
     conn.close()
+
+
+def delete_inventory_item(item_id: int) -> bool:
+    """재고/제품 목록에서 지정한 ID의 항목을 삭제합니다."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM inventory_items WHERE id = ?", (item_id,))
+    deleted = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+def get_all_inventory_items() -> list[dict]:
+    """전체 재고 품목 목록을 조회하고, 가능하면 마스터 DB의 식품유형·제조사 정보도 함께 붙입니다."""
+    conn = get_connection()
+    _ensure_inventory_columns(conn)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT
+            i.id,
+            i.bar_cd,
+            i.prdlst_nm,
+            i.expiry_date,
+            i.quantity,
+            i.location,
+            COALESCE(i.supplier, '') AS supplier,
+            COALESCE(i.category, '') AS category,
+            i.photo_path,
+            i.memo,
+            i.created_at,
+            COALESCE(m.prdlst_dcnm, '') AS prdlst_dcnm,
+            COALESCE(m.bssh_nm, '') AS bssh_nm
+        FROM inventory_items i
+        LEFT JOIN master_products m ON i.bar_cd = m.bar_cd
+        ORDER BY i.expiry_date ASC, i.id DESC
+        """
+    )
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows

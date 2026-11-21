@@ -1,6 +1,5 @@
 import os
 import sqlite3
-from datetime import datetime
 
 DB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "local_storage")
 DB_PATH = os.path.join(DB_DIR, "inventory_local.db")
@@ -98,25 +97,6 @@ def init_db():
     cur.execute("INSERT OR IGNORE INTO sync_metadata (meta_key, meta_value) VALUES ('barcode_api_updated_at', '미다운로드')")
     cur.execute("INSERT OR IGNORE INTO sync_metadata (meta_key, meta_value) VALUES ('report_api_updated_at', '미다운로드')")
     cur.execute("INSERT OR IGNORE INTO sync_metadata (meta_key, meta_value) VALUES ('custom_folder_path', ?)", (EXPORT_DIR,))
-
-    # 샘플 테스트 데이터 (초기 확인용)
-    cur.execute("""
-        INSERT OR IGNORE INTO master_products (
-            bar_cd, prdlst_report_no, prdlst_nm, pog_daycnt, prdlst_dcnm,
-            bssh_nm, induty_nm, site_addr, prms_dt, end_dt, clsbiz_dt, photo_path, source_type
-        ) VALUES (
-            '8801062000012', '19970312001', '쵸코카라멜', '제조일로부터 12개월', '캔디류',
-            '한양제과주식회사', '식품제조가공업', '경기도 동두천시', '19971009', '20161124', '', '', '바코드연계제품정보'
-        )
-    """)
-
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    cur.execute("SELECT COUNT(*) as cnt FROM inventory_items")
-    if cur.fetchone()["cnt"] == 0:
-        cur.execute("""
-            INSERT INTO inventory_items (bar_cd, prdlst_nm, expiry_date, quantity, location, photo_path, memo, created_at)
-            VALUES ('8801062000012', '쵸코카라멜', ?, 3, '거실 간식함', '', '테스트 재고', ?)
-        """, (today_str, today_str))
 
     conn.commit()
     conn.close()
